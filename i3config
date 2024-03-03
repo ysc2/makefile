@@ -1,0 +1,973 @@
+#!/usr/bin/env bash
+########################################################################
+# File Name: i3config
+# Author: Awkee
+# mail: next4nextjob@gmail.com
+# Created Time: 2023年 06月 15日 星期四 19:28:08 CST
+#
+# 非强制性约束: 网络下载使用curl命令而不用wget，没有任何歧视含义，仅处于统一要求
+#
+# 功能简述:  个人Linux桌面环境配置工具
+########################################################################
+# set -e              # 命令执行失败就中止继续执行
+# 环境变量参数:
+#   OUTPUTLOG - no 表示只输出日志信息到文件中,不在终端显示，默认为 yes(终端显示)
+#
+I3CONFIG_VERSION="v0.1.3"
+dotfiles_path=$HOME/.config/dotfiles
+
+source ~/.bashrc
+
+#### 默认选项 #####
+default_confirm="no"    # 是否提示确认，no-提示，yes-自动选择yes
+PMT=">>>"
+if [ "$OUTPUTLOG" = "" ] ; then
+    OUTPUTLOG="yes"  # 默认输出日志内容到 stdout
+fi
+
+
+curl_cmd="curl -C - "  # 支持断点继续下载
+
+# Define Colors
+RED='\e[41m'
+BRB='\e[1;7;31;47m' # Blink Red bold
+NC='\e[0m' # No color
+BG='\e[7m' # Highlighting Background color
+TC='\e[1m' # Highlighting Text color
+
+########### 文字显示颜色输出函数 ######
+function echo_white()  { printf "\033[0;37m$@\033[0m"     ; }
+function echo_whiter() { printf "\033[0;37;7m$@\033[0m"   ; }
+function echo_red()    { printf "\033[0;31m$@\033[0m"     ; }
+function echo_redr()   { printf "\033[0;31;7m$@\033[0m"   ; }
+function echo_green()  { printf "\033[0;32m$@\033[0m"     ; }
+function echo_greenr() { printf "\033[0;32;7m$@\033[0m"   ; }
+function white_line()  { printf "\033[0;37m$@\033[0m\n"   ; }
+function whiter_line() { printf "\033[0;37;7m$@\033[0m\n" ; }
+function red_line()    { printf "\033[0;31;1m$@\033[0m\n" ; }
+function redr_line()   { printf "\033[0;31;7m$@\033[0m\n" ; }
+function green_line()  { printf "\033[0;32;1m$@\033[0m\n" ; }
+function greenr_line() { printf "\033[0;32;7m$@\033[0m\n" ; }
+
+line_feed="+--------------------------------------------------------------------------------+"
+
+# 临时存储代码、下载文件目录
+tmp_dir=/tmp
+item_index=0   # 记录菜单选项序号
+item_line_count=2   # 每行显示菜单数量
+ILEN=40   # 单个选项长度
+MLEN=$((${ILEN} * ${item_line_count}))   # 单行最大长度
+
+
+#### 检测当前终端支持色彩
+function check_term() {
+	# 指定 TERM ，避免对齐问题(已知某些rxvt-unicode终端版本存在对齐问题)
+    if [[ "`tput colors`" -ge "256" ]] ; then
+        echo "支持 256color TERM终端"
+    else
+        export TERM=xterm
+        export COLORTERM=truecolor
+    fi
+    echo "当前终端类型: $TERM"
+    echo "当前终端色彩: $COLORTERM"
+	#echo "提示: 8bit 仅支持8种色彩, truecolor/24bit 支持更多色彩"
+}
+
+function menu_line() { let rlen="$item_line_count * $ILEN + 1" ; echo -en "|${BRB} $@ $NC" ; tput hpa $rlen ; echo "|" ; }
+function menu_head() { echo $line_feed ;   menu_line "$@" ; echo $line_feed ; }
+# 一行可以有 item_line_count 个菜单选项
+function menu_item() { let item_index=$item_index+1 ; n=$1 ; shift ; let rlen="$item_index * $ILEN + 1" ; echo -en "|  $BG ${n} $NC $@" ; tput hpa $rlen ; [[ "$item_index" == "$item_line_count" ]] && echo "|" && item_index=0 ; }
+# 输出单行长菜单选项,长度有限制
+function menu_iteml() { let rlen="$item_line_count * $ILEN + 1" ; n=$1 ; shift ; echo -en "|  $BG ${n} $NC $@" ; tput hpa $rlen ; echo "|" ; }
+# 用于输入长信息(非菜单选项),不限制结尾长度
+function menu_info() { n=$1 ; shift ; echo -e "|  $BG ${n} $NC $@" ; }
+function menu_tail() { [[ "$item_index" != "0" ]] && echo "|" ; echo $line_feed ; item_index=0 ; }
+
+# 日志记录
+log_file="/tmp/i3config.log"
+function output_msg() { LEVEL="$1" ; shift ; echo -e "$(date +'%Y年%m月%d日%H:%M:%S'):${LEVEL}: $@" ; }
+function output_log() { if [ "$OUTPUTLOG" = "yes" ] ; then  output_msg $@ | tee -a $log_file ; else output_msg $@ >> $log_file ; fi }
+function loginfo() { output_log "INFO" $@  ; }
+function logerr()  { output_log "ERROR" $@ ; }
+
+################################################################
+#  文本信息设定
+
+# 欢迎和再见提示信息
+WELCOME="^_^你笑起来真好看!像春天的花一样!"
+SEE_YOU="^_^出去晒晒太阳吧!多运动才更健康!"
+
+READ_TIMEOUT=30   # read timeout seconds
+
+########### 运行条件检测 ###########
+function prompt() { # 提示确认函数，如果使用 -y 参数默认为Y确认
+    msg="$@"
+    if [ "$default_confirm" != "yes" ] ; then
+        read -t $READ_TIMEOUT -r -n 1 -e  -p "$msg (y/`echo_greenr N`)" str_answer
+        case "$str_answer" in
+            y*|Y*)  echo "已确认" ; return 0 ;;
+            *)      echo "已取消" ; return 1 ;;
+        esac
+    else
+        echo "$msg (已默认选择 Yes)"
+    fi
+    return 0
+}
+# 检查是否有root权限并提示，需要root权限的命令要添加sudo
+function check_root() { [[ "`uid -u`" = "0" ]]  && ! prompt "提示:确认在root用户下或者使用sudo运行?" && exit 0 ; }
+
+function check_basic() { # 基础依赖命令检测与安装
+    command -v apt-get >/dev/null 2>&1 && sudo apt-get install   -y curl git
+    command -v dnf     >/dev/null 2>&1 && sudo dnf install       -y curl git
+    command -v zypper  >/dev/null 2>&1 && sudo zypper install    -y curl git
+    command -v pacman  && sudo pacman -S --noconfirm --needed curl git
+
+    # Anaconda3 环境可能导致编译失败.
+    # 如果不是使用 conda init 方式设置环境，可能取消激活操作会失败
+    anaconda -V >/dev/null 2>&1 && echo -e "python3 version: ${BRB}`python3 --version` ${NC},path: ${BRB}`command -v python3`${NC}" && echo "检测到您使用了 anaconda 环境，这可能导致编译安装失败, 本脚本会关闭Anaconda环境" && conda deactivate
+    echo -e "python3 version: ${BRB}`python3 --version`${NC} ,path: ${BRB}`command -v python3`${NC}"
+}
+
+# 创建软链接或重命名目录
+function create_symlink() {
+    source_file="$1"
+    target_file="$2"
+
+    [[ ! -r "$source_file" ]] && loginfo "找不到 $source_file 目录或文件" && return 1
+    [[ -L "$target_file" ]] && loginfo "目标路径 ${target_file} 是软链接，删除软链接" && rm "$target_file"
+    [[ -r "$target_file" ]] && loginfo "目标路径 ${target_file} 是目录或文件，重命名" && mv ${target_file} "${target_file}_$(date +%Y-%m-%d)"
+    # 创建软链接
+    ln -sf "$source_file" "$target_file"
+}
+
+function install_build_deps() {
+    command -v apt-get && sudo apt-get install   -y build-essential git meson ninja-build make cmake cmake-data pkg-config python3-sphinx python3-packaging dh-autoreconf && return 0
+    command -v dnf     && sudo dnf install       -y gcc gcc-c++ git meson ninja-build pkg-config make cmake @development-tools python3-sphinx python3-sphinx_rtd_theme python3-packaging dh-autoreconf && return 0
+    command -v zypper  && sudo zypper install    -y gcc gcc-c++ git meson ninja pkg-config make cmake python3 python3-Sphinx python3-packaging python3-sphinx_rtd_theme dh-autoreconf && return 0
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed gcc git meson ninja pkg-config make cmake python3 python-sphinx python-packaging python-sphinx_rtd_theme autoconf automake bison && return 0
+}
+
+function install_polybar_deps() {
+    command -v apt-get   && sudo apt-get install -y libuv1-dev libcairo2-dev libxcb1-dev libxcb-util0-dev libxcb-randr0-dev libxcb-composite0-dev python3-xcbgen xcb-proto libxcb-image0-dev libxcb-ewmh-dev libxcb-icccm4-dev lm-sensors x11-utils xdotool pulseaudio pulseaudio-utils && return 0
+    command -v dnf       && sudo dnf install     -y libuv-devel cairo-devel xcb-util-devel libxcb-devel xcb-proto xcb-util-image-devel xcb-util-wm-devel lm_sensors xprop xdotool xev xwininfo pulseaudio pulseaudio-utils && return 0
+    command -v zypper    && sudo zypper install  -y libuv-devel cairo-devel xcb-util-devel libxcb-devel xcb-proto-devel xcb-util-image-devel xcb-util-wm-devel lm-sensors xprop xdotool xev xwininfo pulseaudio pulseaudio-utils && return 0
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed libuv cairo xcb-util libxcb xcb-proto-devel xcb-util-image xcb-util-wm lm_sensors xorg-xprop xdotool xorg-xev xorg-xwininfo pulseaudio && return 0
+}
+
+function install_polybar_deps_opt() {
+    command -v apt-get   && sudo apt-get install -y libxcb-xkb-dev libxcb-xrm-dev libxcb-cursor-dev libasound2-dev libpulse-dev libjsoncpp-dev libmpdclient-dev libcurl4-openssl-dev libnl-genl-3-dev && return 0
+    command -v dnf       && sudo dnf install     -y xcb-util-xrm-devel xcb-util-cursor-devel alsa-lib-devel pulseaudio-libs-devel jsoncpp-devel libmpdclient-devel libcurl-devel libnl3-devel && return 0
+    command -v zypper    && sudo zypper install  -y libxcb-xkb1 xcb-util-xrm-devel xcb-util-cursor-devel alsa-devel libpulse-devel jsoncpp-devel libmpdclient-devel libcurl-devel libnl3-devel && return 0
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed libxcb xcb-util-xrm xcb-util-cursor alsa-lib libpulse jsoncpp libmpdclient libcurl-compat libnl && return 0
+}
+
+function compile_polybar() {
+    ! i3 -v && echo "没找到 i3 命令，请确保先安装了 i3wm 环境后再安装 polybar" && return 1
+    read -t $READ_TIMEOUT -p "`echo_green '输入安装目录,默认 /usr/local :'`" str_dst
+    [[ "$str_dst" == "" ]] && str_dst="/usr/local"
+    [[ ! -d "$str_dst" ]] && echo "设置的安装目录前缀不存在! [$str_dst]" && return 2
+    tmp_path=${tmp_dir}/polybar
+    [[ -d $tmp_path ]] && prompt "`echo_red '检测到您已经克隆了代码，是否重新克隆代码'`" && rm -rf $tmp_path
+
+    install_build_deps
+    install_polybar_deps
+    install_polybar_deps_opt
+    echo "gcc version : `gcc -dumpversion` , 推荐使用 gcc10 版本编译器(官方要求gcc>=5.1)"
+    [[ -d "$tmp_path" ]] || git clone --recursive https://github.com/polybar/polybar ${tmp_path}
+    cd $tmp_path && ./build.sh --all-features --gcc --jobs --auto
+}
+
+function install_i3wm_deps() {
+    command -v apt-get && sudo apt-get install   -y pkg-config libstartup-notification0-dev libxcb-xkb-dev libxcb-xinerama0-dev libxcb-cursor-dev libxcb-keysyms1-dev \
+            libxcb-icccm4-dev libxcb-xrm-dev libxkbcommon-x11-dev libyajl-dev libcairo2-dev libpango1.0-dev libxfixes-dev libxcb-randr0-dev \
+            libxcb-shape0-dev libev-dev
+    command -v dnf     && sudo dnf install       -y pkg-config libxcb-devel xcb-util-devel libxkbcommon-devel libxkbcommon-x11-devel xcb-util-cursor-devel \
+            xcb-util-wm-devel xcb-util-keysyms-devel xcb-util-xrm-devel libev-devel yajl-devel asciidoc \
+            xmlto pcre2-devel startup-notification-devel pango-devel cairo-devel perl-ExtUtils-MakeMaker
+    command -v zypper  && sudo zypper install    -y pkg-config libxcb-devel xcb-util-devel libxkbcommon-devel libxkbcommon-x11-devel xcb-util-cursor-devel \
+            xcb-util-wm-devel xcb-util-keysyms-devel xcb-util-xrm-devel libev-devel libyajl-devel asciidoc \
+            xmlto pcre2-devel startup-notification-devel pango-devel cairo-devel libiconv_hook-devel 
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed pkg-config libxcb xcb-util libxkbcommon libxkbcommon-x11 xcb-util-cursor \
+            xcb-util-wm xcb-util-keysyms xcb-util-xrm libev yajl asciidoc \
+            xmlto pcre2 startup-notification pango cairo libiconv
+}
+function compile_i3wm() {
+    tmp_path="$tmp_dir/i3wm"
+    i3 -v >/dev/null 2>&1 && echo "i3 命令已经安装过了" && ! prompt "仍然继续编译安装 i3 么? 建议手工卸载后再尝试" && return 1
+    read -t $READ_TIMEOUT -p "`echo_green '输入安装目录,默认 /usr :'`" str_dst
+    [[ "$str_dst" == "" ]] && str_dst="/usr"
+    [[ ! -d "$str_dst" ]] && echo "设置的安装目录前缀不存在! [$str_dst]" && return 2
+    # read -t $READ_TIMEOUT -p "`echo_green '选择代码分支 next/stable,默认next:'`" str_branch
+    [[ "$str_branch" == "" ]] && str_branch="next"
+    [[ -d $tmp_path ]] && prompt "`echo_red '检测到您已经克隆了代码，是否重新克隆代码'`" && rm -rf $tmp_path
+    [[ -d "$tmp_path" ]] || git clone https://github.com/i3/i3.git $tmp_path
+    install_build_deps
+    install_i3wm_deps
+    cd $tmp_path && git checkout ${str_branch} && mkdir -p build && cd build && meson --prefix=${str_dst} -Ddocs=false -Dmans=false .. && ninja && sudo ninja install
+    [[ -x "$str_dst/bin/i3" ]] || echo "安装失败!" && return 3
+    echo "i3wm 安装成功,当前 i3wm 版本: `i3 -v`"
+}
+
+function install_picom_deps() {
+    command -v apt-get  >/dev/null 2>&1 && sudo apt-get install -y libxext-dev libxcb1-dev libxcb-util-dev libxcb-damage0-dev libxcb-dpms0-dev libxcb-xfixes0-dev libxcb-shape0-dev libxcb-render-util0-dev libxcb-render0-dev libxcb-randr0-dev libxcb-composite0-dev libxcb-image0-dev libxcb-present-dev libxcb-glx0-dev libpixman-1-dev libdbus-1-dev libconfig-dev libgl-dev libegl-dev libpcre2-dev libevdev-dev uthash-dev libev-dev libx11-xcb-dev
+    command -v dnf      >/dev/null 2>&1 && sudo dnf     install -y dbus-devel libconfig-devel libdrm-devel libev-devel libX11-devel libX11-xcb libXext-devel libxcb-devel libGL-devel libEGL-devel pcre2-devel pixman-devel uthash-devel xcb-util-image-devel xcb-util-renderutil-devel xorg-x11-proto-devel
+    command -v zypper   >/dev/null 2>&1 && sudo zypper  install -y dbus-1-devel libX11-devel libX11-xcb1 libXext-devel xproto-devel \
+                libxcb-devel libpixman-1-0-devel Mesa-libGL-devel Mesa-libEGL-devel pcre2-devel libev-devel uthash-devel \
+                libconfig-devel libxcb-composite0 libxcb-damage0 libxcb-dpms0 libxcb-glx0 libxcb-image0 libxcb-present0 \
+                libxcb-randr0 libxcb-render0 libxcb-shape0 libxcb-xfixes0
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed dbus libx11 libxext \
+                libxcb pixman mesa pcre2 libev uthash libconfig
+}
+function compile_picom() {
+    url="https://github.com/yshui/picom.git"
+    tmp_path=$tmp_dir/picom
+    [[ -d "$tmp_path" ]] && prompt "已经克隆过代码，是否重新克隆?" && rm -rf "$tmp_path"
+    [[ -d "$tmp_path" ]] || git clone $url $tmp_path
+    [[ ! -d "$tmp_path" ]] && echo "克隆代码失败!稍后再重试!" && return 0
+    
+    read -t $READ_TIMEOUT -p "`echo_green '输入安装目录,默认 /usr/local :'`" str_dst
+    [[ "$str_dst" == "" ]] && str_dst="/usr/local"
+    [[ ! -d "$str_dst" ]] && echo "设置的安装目录前缀不存在! [$str_dst]" && return 2
+    # read -t $READ_TIMEOUT -p "`echo_green '选择代码分支 next/stable,默认next:'`" str_branch
+    [[ "$str_branch" == "" ]] && str_branch="next"
+    
+    install_build_deps
+    install_picom_deps
+    cd $tmp_path && git checkout ${str_branch} && git submodule update --init --recursive
+    meson setup --prefix=${str_dst} --buildtype=release . build   && ninja -C build && sudo ninja -C build install
+}
+function install_dotfiles() {
+    # 克隆自己的 dotfiles 配置文档
+    tmp_path=$dotfiles_path
+    [[ -d "$tmp_path" ]] && prompt "`echo_redr \"$tmp_path 代码已经克隆过， 是否重新克隆安装?\"`" && mv ${tmp_path} ${tmp_path}.`date +%Y%m%d%H%M`
+    [[ -d "$tmp_path" ]] || git clone --depth=1 --shallow-submodules --recurse-submodules https://github.com/switchToLinux/dotfiles.git $tmp_path
+    cd $tmp_path || return 1
+
+    create_symlink $tmp_path/i3_polybar ~/.config/i3
+    meta_key="Mod1"
+    prompt "是否使用Alt键作为\$mod键(y--选择Alt键,N-选择Supper/Win键)" || meta_key="Mod4"
+    sed -i "s/^set \$mod .*/set \$mod ${meta_key}/g" ~/.config/i3/config
+    menu_head "已经选择 $meta_key 作为 \$mod 键(Mod1:Alt,Mod4:Super)"
+
+    create_symlink $tmp_path/polybar_themes ~/.config/polybar_themes
+    create_symlink $tmp_path/picom ~/.config/picom
+    mkdir -p ~/.local/share/mpd
+    create_symlink $tmp_path/mpd ~/.config/mpd
+    create_symlink $tmp_path/dunst ~/.config/dunst
+    create_symlink $tmp_path/ranger ~/.config/ranger
+    # replace by rofi_themes
+    # create_symlink $tmp_path/rofi ~/.config/rofi
+    create_symlink $tmp_path/ncmpcpp ~/.config/ncmpcpp
+
+    echo "配置 ~/.Xresources 文件"
+    create_symlink $tmp_path/Xresources ~/.Xresources
+    create_symlink $tmp_path/Xresources.d ~/.config/Xresources.d
+
+    i3_desktop_data="W0Rlc2t0b3AgRW50cnldCk5hbWU9aTMKQ29tbWVudD1pbXByb3ZlZCBkeW5hbWljIHRpbGluZyB3aW5kb3cgbWFuYWdlcgpFeGVjPWkzClRyeUV4ZWM9aTMKVHlwZT1BcHBsaWNhdGlvbgpYLUxpZ2h0RE0tRGVza3RvcE5hbWU9aTMKRGVza3RvcE5hbWVzPWkzCktleXdvcmRzPXRpbGluZzt3bTt3aW5kb3dtYW5hZ2VyO3dpbmRvdzttYW5hZ2VyOwoK"
+    sudo sh -c "echo $i3_desktop_data| base64 -d > /usr/share/xsessions/i3.desktop"
+
+    desktop_data="W0Rlc2t0b3AgRW50cnldCkVuY29kaW5nPVVURi04ClR5cGU9QXBwbGljYXRpb24KTmFtZT1pMwpOb0Rpc3BsYXk9dHJ1ZQpHZW5lcmljTmFtZT1BIGR5bmFtaWMgdGlsaW5nIHdpbmRvdyBtYW5hZ2VyCkNvbW1lbnQ9aW1wcm92ZWQgZHluYW1pYyB0aWxpbmcgd2luZG93IG1hbmFnZXIKSWNvbj1pMwpFeGVjPWkzClgtR05PTUUtV01OYW1lPWkzClgtR05PTUUtQXV0b3N0YXJ0LVBoYXNlPVdpbmRvd01hbmFnZXIKWC1HTk9NRS1Qcm92aWRlcz13aW5kb3dtYW5hZ2VyClgtR05PTUUtQXV0b3N0YXJ0LU5vdGlmeT1mYWxzZQoK"
+    sudo sh -c "echo $desktop_data | base64 -d > /usr/share/applications/i3.desktop"
+
+    echo "配置 neovim 环境"
+    create_symlink $tmp_path/nvim ~/.config/nvim
+
+    echo "配置 xfce4-terminal 环境"
+    mkdir -p ~/.config/xfce4
+    create_symlink $tmp_path/xfce4_terminal ~/.config/xfce4/terminal
+    
+    # picom 使用gpu 时 ，设置 glx , 使用cpu时设置 xrender
+    # 如果 nvidia-smi 命令 或 amdgpu-pro 命令存在 则使用 glx ， 否则使用 xrender
+    if command -v nvidia-smi >/dev/null 2>&1 || command -v amdgpu-pro >/dev/null 2>&1; then
+        backend="glx"
+    else
+        backend="xrender"
+    fi
+
+    # 替换配置文件中的 backend 配置
+    menu_head "设置 picom 使用的后端为 $backend , 如果有独显则可以使用 glx"
+    sed -i "s/^backend = .*/backend = \"$backend\"/" ~/.config/picom/picom.conf
+    echo "完成 dotfiles 配置任务!"
+}
+
+function install_i3lock_deps() {
+    command -v apt-get >/dev/null 2>&1 && sudo apt-get   install -y libjpeg-dev libpam0g-dev
+    command -v dnf      >/dev/null 2>&1 && sudo dnf      install -y libjpeg-turbo-devel pam pam-devel
+    command -v zypper >/dev/null 2>&1 && sudo zypper     install -y libjpeg8-devel pam pam-devel
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed libjpeg-turbo pam
+}
+function compile_i3lock_color() {
+    prompt "编译安装 i3lock-color" || return 1
+    url="https://github.com/Raymo111/i3lock-color.git"
+    tmp_path=$tmp_dir/i3lock-color
+    [[ -d "$tmp_path" ]] && prompt "已经克隆过代码，是否重新克隆?" && rm -rf "$tmp_path"
+    [[ -d "$tmp_path" ]] || git clone $url $tmp_path
+    [[ ! -d "$tmp_path" ]] && echo "克隆代码失败!稍后再重试!" && return 0
+
+    install_i3lock_deps
+    install_build_deps
+    cd $tmp_path && ./install-i3lock-color.sh
+}
+function install_rofi_deps(){
+    command -v apt-get >/dev/null 2>&1 && sudo apt-get   install -y libgdk-pixbuf-2.0-dev bison flex flex-doc
+    command -v dnf      >/dev/null 2>&1 && sudo dnf      install -y ghc-gi-gdkpixbuf-devel
+    command -v zypper >/dev/null 2>&1 && sudo zypper     install -y gdk-pixbuf-devel flex
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed gdk-pixbuf2 flex
+}
+function compile_rofi() {
+    prompt "编译安装 rofi" || return 1
+    url="https://github.com/davatorium/rofi.git"
+    tmp_path=$tmp_dir/rofi
+    [[ -d "$tmp_path" ]] && prompt "已经克隆过代码，是否重新克隆?" && rm -rf "$tmp_path"
+    [[ -d "$tmp_path" ]] || git clone --recursive $url $tmp_path
+    [[ ! -d "$tmp_path" ]] && echo "克隆代码失败!稍后再重试!" && return 0
+
+    read -t $READ_TIMEOUT -p "`echo_green '输入安装目录,默认 /usr/local :'`" str_dst
+    [[ "$str_dst" == "" ]] && str_dst="/usr/local"
+    [[ ! -d "$str_dst" ]] && echo "设置的安装目录前缀不存在! [$str_dst]" && return 2
+    # read -t $READ_TIMEOUT -p "`echo_green '选择代码分支 next/stable,默认next:'`" str_branch
+    [[ "$str_branch" == "" ]] && str_branch="next"
+
+    install_rofi_deps
+    install_build_deps
+    cd $tmp_path && git checkout $str_branch && meson setup build --prefix=${str_dst} &&  ninja -C build && sudo ninja -C build install
+}
+
+function install_mpd_deps() {
+    command -v apt-get && sudo apt-get install -y meson g++ \
+        libfmt-dev libpcre2-dev libmad0-dev libmpg123-dev libid3tag0-dev \
+        libflac-dev libvorbis-dev libopus-dev libogg-dev \
+        libadplug-dev libaudiofile-dev libsndfile1-dev libfaad-dev \
+        libfluidsynth-dev libgme-dev libmikmod-dev libmodplug-dev \
+        libmpcdec-dev libwavpack-dev libwildmidi-dev \
+        libsidplay2-dev libsidutils-dev libresid-builder-dev libavcodec-dev libavformat-dev \
+        libmp3lame-dev libtwolame-dev libshine-dev libsamplerate0-dev libsoxr-dev \
+        libbz2-dev libcdio-paranoia-dev libiso9660-dev libmms-dev \
+        libzzip-dev libcurl4-gnutls-dev libyajl-dev libexpat-dev \
+        libasound2-dev libao-dev libjack-jackd2-dev libopenal-dev \
+        libpulse-dev libshout3-dev libsndio-dev libmpdclient-dev \
+        libnfs-dev libupnp-dev libavahi-client-dev libsqlite3-dev libsystemd-dev \
+        libgtest-dev libboost-dev libicu-dev libchromaprint-dev libgcrypt20-dev
+    command -v dnf    && sudo dnf      install -y fmt-devel pcre2-devel libmad-devel mpg123-devel libid3tag-devel \
+        flac-devel libvorbis-devel libopusenc-devel libogg-devel adplug-devel audiofile-devel libsndfile-devel faad2-devel \
+        fluidsynth-devel libmikmod-devel libmodplug-devel libmpcdec-devel wavpack-devel wildmidi-devel \
+        libsidplayfp-devel ffmpeg ffmpeg-libs lame-devel twolame-devel libsamplerate-devel soxr-devel \
+        bzip2-devel libcdio-paranoia-devel libisofs-devel libmms-devel zziplib-devel libcurl-devel \
+        yajl-devel expat-devel SAASound-devel libao-devel openal-soft-devel \
+        pulseaudio-libs-devel libshout-devel libmpdclient-devel libnfs-devel libupnp-devel avahi-devel \
+        libsqlite3x-devel systemd-devel gtest-devel boost-devel libicu-devel libchromaprint-devel libgcrypt-devel
+        # no install: libgme libsidutils libresid-builder-dev libshine libjack-jackd2-dev libsndio-dev
+    command -v zypper && sudo zypper     install -y fmt-devel pcre2-devel libmad-devel mpg123-devel libid3tag-devel \
+        flac-devel libvorbis-devel libopus-devel libogg-devel audiofile-devel libsndfile-devel libfaad-devel \
+        fluidsynth-devel libgme-devel  libmikmod-devel libmodplug-devel libmpcdec-devel wavpack-devel wildmidi-devel \
+        libsidplayfp-devel ffmpeg libavcodec-devel libavformat-devel libmp3lame-devel libtwolame-devel libshine-devel libsamplerate-devel soxr-devel \
+        libbz2-devel libcdio-paranoia-devel libisofs-devel libmms-devel zziplib-devel libcurl-devel \
+        libyajl-devel libexpat-devel libasound2 libsoundio-devel libao-devel libjack-devel openal-soft-devel \
+        libpulse-devel libshout-devel sndio-devel libmpdclient-devel libnfs-devel libupnp-devel libavahi-client3 \
+        sqlite3-devel systemd-devel gtest libboost_headers-devel libicu-devel libchromaprint-devel libgcrypt-devel
+        # no install: adplug libsidutils libresid-builder-dev 
+    command -v pacman && sudo pacman -S --needed --noconfirm --needed fmt pcre2 libmad mpg123 libid3tag flac libvorbis opus libogg \
+        audiofile libsndfile faad2 fluidsynth libgme libmikmod libmodplug \
+        libmpcdec wavpack wildmidi libsidplayfp ffmpeg lame twolame libsamplerate libsoxr bzip2 \
+        libcdio-paranoia libisofs libmms zziplib libcurl-compat yajl expat alsa-lib libao jack2 \
+        openal libpulse libshout sndio libmpdclient libnfs libupnp avahi sqlite systemd-libs \
+        gtest boost-libs icu chromaprint chromaprint
+
+        # adplug shine \
+        # https://github.com/adplug/adplug
+        # https://github.com/mcfiredrill/libgme
+}
+function compile_mpd() {
+    prompt "编译安装 mpd(libavcodec等库需要第三方源)" || return 1
+    url="https://github.com/MusicPlayerDaemon/MPD.git"
+    tmp_path=$tmp_dir/mpd
+    [[ -d "$tmp_path" ]] && prompt "已经克隆过代码，是否重新克隆?" && rm -rf "$tmp_path"
+    [[ -d "$tmp_path" ]] || git clone --recursive $url $tmp_path
+    [[ ! -d "$tmp_path" ]] && echo "克隆代码失败!稍后再重试!" && return 0
+
+    read -t $READ_TIMEOUT -p "`echo_green '输入安装目录,默认 /usr/local :'`" str_dst
+    [[ "$str_dst" == "" ]] && str_dst="/usr/local"
+    [[ ! -d "$str_dst" ]] && echo "设置的安装目录前缀不存在! [$str_dst]" && return 2
+    # read -t $READ_TIMEOUT -p "`echo_green '选择代码分支 master/stable,默认master:'`" str_branch
+    [[ "$str_branch" == "" ]] && str_branch="master"
+
+    install_build_deps
+    install_mpd_deps
+    cd $tmp_path && git checkout $str_branch && meson setup build --prefix=${str_dst} &&  ninja -C build && sudo ninja -C build install
+}
+
+function install_others() {
+    # 使用命令安装 psmisc(killall)
+    command -v apt-get && sudo apt-get install -y feh variety dunst rxvt-unicode x11-xserver-utils mpc ncmpcpp firefox-esr psmisc pulseaudio thunar pamixer neovim
+    # fedora 没有提供mpd安装包(涉及到h264编解码器专利原因),需要替换ffmpeg相关库
+    command -v dnf     && sudo yum install --nogpgcheck https://mirrors.tuna.tsinghua.edu.cn/rpmfusion/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm https://mirrors.tuna.tsinghua.edu.cn/rpmfusion/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
+    command -v dnf     && sudo sed -i 's|^metalink=|#metalink=|g;s|^#baseurl=http://download1.rpmfusion.org/|baseurl=https://mirrors.tuna.tsinghua.edu.cn/rpmfusion/|g' /etc/yum.repos.d/rpmfusion*.repo && sudo dnf install --allowerasing -y mpd
+    command -v dnf     && sudo dnf     install -y feh variety dunst rxvt-unicode xrandr mpc ncmpcpp firefox psmisc thunar pamixer neovim
+    command -v zypper  && sudo zypper  install -y feh variety dunst rxvt-unicode xrandr mpd mpclient ncmpcpp MozillaFirefox psmisc thunar pamixer neovim
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed feh variety dunst rxvt-unicode xorg-xrandr mpc ncmpcpp firefox psmisc thunar noto-fonts jack2 pamixer neovim
+}
+
+function install_urxvt_ext() {
+    ext_path="$HOME/.urxvt/ext"
+    [[ -r "$ext_path" ]] || mkdir -p $ext_path
+    url="https://raw.githubusercontent.com/majutsushi/urxvt-font-size/master/font-size"
+    curl -o $ext_path/font-size $url
+
+}
+# 主题选择工具,选择结果保存在 select_theme 变量中
+# 用法 common_select <theme_dir> <prefix_str>
+# theme_dir ： 用于列举子目录下的选项
+# prefix_str : 用于过滤条件，比如只希望包含.ini的文件列表就可以设置为 ".ini"
+# 输入表达式说明： 支持正则匹配，例如 ^abc$ 就只会匹配 abc 字符串，因为输入内容会作为grep的匹配表达式.
+function common_select() {
+    local theme_dir="$1"
+    local prefix="$2"
+    local current_input=""
+    local exit_loop=false
+    echo -n "输入${prefix}名称:"
+    while ! $exit_loop; do
+        read -t $READ_TIMEOUT -r -s -n 1 char
+
+        if [[ $char == $'\177' ]]; then # 退格键
+            current_input="${current_input%?}"
+        elif [[ "$char" == '' ]]; then # 输入为空时表示结束输入
+            exit_loop=true
+        else # 将输入的字符追加到当前目录
+            current_input="${current_input}${char}"
+        fi
+
+        # 清除当前行并显示新内容
+        tput ed  && echo -ne "\r输入${prefix}名称: ${current_input}"
+
+        if [[ "${current_input}" == "random" ]] ; then  # 随机选择一个主题
+            maxn=`ls "$theme_dir" | grep "$prefix"|wc -l`
+            str_rand="$(($RANDOM%${maxn}))"
+            selected_theme=`ls "$theme_dir" | grep "$prefix" |sed -n "${str_rand}p"`
+            break
+        fi
+        # 保存当前光标位置
+        tput sc
+        # 将光标移动到最后一行
+        echo -n "  >>"
+        # 列出匹配的文件和目录,仅显示前10条
+        selected_theme=$(ls "$theme_dir" | grep "$prefix" | grep -m 1 "$current_input")
+        ls "$theme_dir" | grep "$prefix" | grep "$current_input" | head -10 | while read -r entry; do
+            echo -n " $entry"
+        done
+        # 恢复光标位置
+        tput rc
+    done
+
+    selected_theme="${selected_theme//[$'\t\r\n ']}"
+    echo
+    tput ed
+    prompt "您的${prefix}选择为: ${selected_theme}" || selected_theme=""
+}
+# 主题选择工具,选择结果保存在 select_theme 变量中
+# 用法 common_list_select <data_list> <prompt>
+# data_list : 数据列表，一行一个选项
+# prompt : 提示符，仅用于提示，无其他用途
+# 输入表达式说明： 支持正则匹配，例如 ^abc$ 就只会匹配 abc 字符串，因为输入内容会作为grep的匹配表达式.
+function common_list_select() {
+    local data_list="$1"
+    local prefix="$2"
+    local current_input=""
+    local exit_loop=false
+    echo -n "输入${prefix}名称:"
+    while ! $exit_loop; do
+        read -t $READ_TIMEOUT -r -s -n 1 char
+
+        if [[ $char == $'\177' ]]; then # 退格键
+            current_input="${current_input%?}"
+        elif [[ "$char" == '' ]]; then # 输入为空时表示结束输入
+            exit_loop=true
+        else # 将输入的字符追加到当前目录
+            current_input="${current_input}${char}"
+        fi
+
+        # 清除当前行并显示新内容
+        tput ed  && echo -ne "\r输入${prefix}名称: ${current_input}"
+
+        if [[ "${current_input}" == "random" ]] ; then  # 随机选择一个主题
+            maxn=`echo "$data_list" |wc -l`
+            str_rand="$(($RANDOM%${maxn}))"
+            selected_theme=`echo "$data_list" |sed -n "${str_rand}p"`
+            break
+        fi
+        # 保存当前光标位置
+        tput sc
+        # 将光标移动到最后一行
+        echo -n "  >>"
+        # 列出匹配的文件和目录,仅显示前10条
+        selected_theme=$(echo "$data_list" | grep -m 1 "$current_input")
+        echo "$data_list" | grep "$current_input" | head -10 | while read -r entry; do
+            echo -n " $entry"
+        done
+        # 恢复光标位置
+        tput rc
+    done
+
+    selected_theme="${selected_theme//[$'\t\r\n ']}"
+    echo
+    tput ed
+    prompt "您的${prefix}选择为: ${selected_theme}" || selected_theme=""
+}
+
+function select_xresources_themes() {
+    # tput clear
+    echo "配置 ~/.Xresources 主题"
+    tmp_path=~/.config/Xresources-themes
+    [[ -r $tmp_path ]] && prompt "已经拷贝过 Xresources-themes 了，是否重新拷贝?" && rm -rf $tmp_path
+    [[ -r $tmp_path ]] || git clone --depth 1 https://github.com/janoamaral/Xresources-themes $tmp_path
+
+    selected_theme=""
+
+    menu_head "Xresources-themes主题(大量主题集合):"
+    menu_iteml base16   "166个 base16 主题"
+    menu_iteml iterm2   "162个 iterm2 主题"
+    menu_iteml xcolors  "113个 xcolors 主题"
+    menu_iteml raven    "8个 raven 主题"
+    menu_iteml nord     "1个 nord 主题"
+    menu_iteml arcadia  "6个 arcadia 主题"
+    menu_iteml hyper    "2个 hyper 主题"
+    menu_iteml random   "random 随机一个主题"
+    menu_iteml "推荐: nord"
+    menu_tail
+    
+    common_select "$tmp_path" "" || return 1
+    [[ "$select_theme" == "" ]] && select_theme="nord"
+    sed -E -i "s|^(#include \".config/Xresources-themes/)(.*)\"|\1${selected_theme}\"|g" ~/.Xresources
+    xrdb ~/.Xresources && i3-msg restart
+    menu_iteml "成功切换为 $selected_theme 主题"
+    menu_tail
+}
+
+function select_rofi_themes() {
+    echo "开始安装 rofi themes"
+    tmp_path=~/.config/rofi_themes
+    [[ -r $tmp_path ]] && prompt "已经拷贝过 rofi-themes 了，是否重新拷贝?" && rm -rf $tmp_path
+    if [[ ! -r $tmp_path ]] ; then
+        git clone --depth 1 https://github.com/switchToLinux/rofi_collection.git $tmp_path
+        cd $tmp_path && bash ./setup.sh && echo "安装 rofi themes 成功"
+    fi
+    tmp_path=~/.config/rofi
+    #选择rofi主题(Applet/Launcher/Powermenus)
+    menu_head "rofi-themes主题(大量主题集合):"
+    menu_iteml launchers   "启动器主题"
+    menu_iteml applets    "小插件主题"
+    menu_iteml "推荐: 根据官网 https://github.com/adi1090x/rofi 示例进行选择适合自己的主题"
+    menu_iteml "提示:将替换 \$mod+d 快捷键对应执行命令为启动器脚本"
+    menu_iteml "提示:将替换 \$mod+shift+l 快捷键对应执行命令为powermenu"
+    menu_tail
+
+    if prompt "选择 启动器:" ; then
+        menu_head "提示" "样式比较多，很难一一描述,仅列举常用几个"
+        menu_iteml "type-1/style-10" "水平顶部条状布局"
+        menu_iteml "type-2/style-6" "垂直靠左布局，类似侧边栏效果"
+        menu_iteml "type-3/style-9" "垂直靠右布局，类似侧边栏效果"
+        menu_iteml "type-4/style-10" "垂直靠右布局，类似侧边栏效果"
+        menu_iteml "type-5/style-3" "垂直居中布局"
+        menu_iteml "type-6/style-5" "垂直居中布局"
+        menu_iteml "type-7/style-4" "垂直靠左布局，类似侧边栏效果"
+        selected_theme=""
+        common_select "$tmp_path/launchers" "type" || return 1
+        theme_name="${selected_theme}"
+        [[ "$theme_name" == "" ]] && theme_name="type-3"
+        selected_theme=""
+        common_select "$tmp_path/launchers/${theme_name}/" "style" || return 1
+        style_name=`echo "$selected_theme" | sed 's/.rasi//g'`
+        [[ "$style_name" == "" ]] && style_name="style-1"
+
+        #sed -i "s|^bindsym \$mod+d exec.*|bindsym \$mod+d exec --no-startup-id  ~/.config/rofi/launchers/${theme_name}/launcher.sh|g" ~/.config/i3/config ~/.config/i3/config.d/*
+        sed -i "s|^theme='style.*'|theme='${style_name}'|g" ~/.config/rofi/launchers/${theme_name}/launcher.sh
+        cd ~/.config/rofi/scripts && ln -sf ../launchers/${theme_name}/launcher.sh launcher
+    fi
+    if prompt "选择 applets:" ; then
+        menu_head "选择 applets 类型(默认type-3):"
+        menu_iteml "type-1" "垂直方向显示，图标+文字,居中显示"
+        menu_iteml "type-2" "水平显示内容，图标，居中显示"
+        menu_iteml "type-3" "垂直方向显示, 仅图标,靠右侧边缘显示"
+        menu_iteml "type-4" "水平显示内容，图标，居中显示,顶部有空白显示区域"
+        menu_iteml "type-5" "垂直显示内容，图标+文字，居中显示,左侧有空白显示区域"
+        selected_theme=""
+        common_select "$tmp_path/applets" "type" || return 1
+        theme_name="${selected_theme}"
+        [[ "$theme_name" == "" ]] && theme_name="type-3"
+        menu_head "选择 applets 样式(默认style-1):"
+        menu_iteml "style-1" "无圆角类型，按钮长方形"
+        menu_iteml "style-2" "小弧度圆角类型，按钮长方形"
+        menu_iteml "style-3" "大弧度圆角类型，按钮椭圆形"
+        selected_theme=""
+        common_select "$tmp_path/applets/${theme_name}/" "style" || return 1
+        style_name=`echo "$selected_theme" | sed 's/.rasi//g'`
+        [[ "$style_name" == "" ]] && style_name="style-1"
+        # change theme  type="$HOME/.config/rofi/applets/type-1" # style='style-1.rasi'
+        sed -E -i "s|config/rofi/applets/type-([0-9]+)|config/rofi/applets/${theme_name}|g;s|='style-([0-9]+).rasi|='${style_name}.rasi|g" ~/.config/rofi/applets/shared/theme.bash
+        menu_head "选择 applets 颜色方案(默认为 nord):"
+        selected_theme=""
+        common_select "$tmp_path/colors" || return 1
+        color_name="${selected_theme}"
+        [[ "$color_name" == "" ]] && color_name="nord.rasi"
+        
+        # change color @import "~/.config/rofi/colors/onedark.rasi"
+        sed -E -i "s|config/rofi/colors/(.*.rasi)|config/rofi/colors/${color_name}|g" ~/.config/rofi/applets/shared/colors.rasi
+        menu_iteml "切换 applets 为 $theme_name 主题, ${style_name} 类型, ${color_name} 颜色方案"
+    fi
+    if prompt "选择 powermenu:" ; then
+        menu_head "选择 powermenu 主题类型(默认 type-4)"
+        menu_iteml "type-1" "居中显示，图标+文字"
+        menu_iteml "type-2" "居中显示，仅图标"
+        menu_iteml "type-3" "全屏显示，垂直布局，黑色背景"
+        menu_iteml "type-4" "全屏显示，水平布局，渐变色背景"
+        menu_iteml "type-5" "居中显示，水平布局，顶部有空白显示区域"
+        menu_iteml "type-6" "居中显示，垂直布局，左侧有空白显示区域"
+        selected_theme=""
+        common_select "$tmp_path/powermenu" "type" || return 1
+        theme_name="${selected_theme}"
+        [[ "$theme_name" == "" ]] && theme_name="type-3"
+        menu_head "选择 powermenu $theme_name 的样式(默认为type-4,style-5)"
+        menu_iteml "提示" "不同type下样式无法归类描述,仅列举典型描述"
+        menu_iteml "type-1,style-4 居中显示，按钮垂直布局"
+        menu_iteml "type-1,style-5 居中显示，按钮水平布局"
+        menu_iteml "type-2,style-4 垂直靠右布局"
+        menu_iteml "type-2,style-5 垂直靠左布局，圆角按钮"
+        menu_iteml "type-2,style-6 水平底部布局，圆角按钮"
+        menu_iteml "type-2,style-8 垂直靠右布局,背景透明，圆角按钮"
+        menu_iteml "type-2,style-10 水平居中布局,背景透明，圆角按钮"
+        menu_iteml "type-3,style-1 水平居中布局,圆角按钮"
+        menu_iteml "type-4,style-1 水平全屏布局,背景透明，圆角按钮"
+        menu_iteml "type-4,style-3 水平居中显示,背景透明，圆角按钮"
+        menu_iteml "type-4,style-4 水平全屏布局,背景蓝粉色渐变"
+        menu_iteml "type-4,style-5 水平全屏布局,背景蓝黑色渐变"
+        menu_iteml "type-5,style-4 上下布局,顶部有空白显示图片区域"
+        menu_iteml "type-6,style-4 上下布局,顶部有空白显示图片区域"
+
+        selected_theme=""
+        common_select "$tmp_path/powermenu/${theme_name}/" "style" || return 1
+        style_name=`echo "$selected_theme" | sed 's/.rasi//g'`
+        [[ "$style_name" == "" ]] && style_name="style-1"
+
+        #sed -i "s|^bindsym \$mod+shift+l exec.*|bindsym \$mod+shift+l exec --no-startup-id  ~/.config/rofi/powermenu/${theme_name}/powermenu.sh|g" ~/.config/i3/config ~/.config/i3/config.d/*
+        sed -E -i "s|='style-[0-9]+'|='${style_name}'|g" ~/.config/rofi/powermenu/${theme_name}/powermenu.sh
+        cd ~/.config/rofi/scripts && ln -sf ../powermenu/${theme_name}/powermenu.sh powermenu
+        menu_iteml "切换 powermenu 为 $theme_name 主题, 应用 ${style_name} 类型"
+    fi
+    i3-msg restart
+    menu_tail
+}
+function select_polybar_themes() {
+    prompt "开始设置 polybar 主题" || return 1
+    tmp_path="$HOME/.config/polybar_themes"
+    [[ ! -r $tmp_path ]] && return 1
+    prompt "更新 polybar 主题到最新版" && cd $tmp_path && git pull && cd -
+    menu_head "选择 polybar_themes 主题(默认zioer)"
+    selected_theme=""
+    common_select "$tmp_path/themes"
+    theme_name="${selected_theme}"
+    [[ "$theme_name" == "" ]] && theme_name="zioer"
+    menu_head "请为 $theme_name 主题选择 prompt样式(默认triangle)"
+    style_list="`grep '^sep_.*_left = ' ~/.config/polybar_themes/template/icons.ini | awk -F_ '{ a[$2]++}END{for(i in a){ printf("%s\n",i) }}'`"
+    selected_theme=""
+    common_list_select "$style_list" "prompt样式"
+    prompt_style="${selected_theme}"
+    [[ "$prompt_style" == "" ]] && prompt_style="triangle"
+    menu_head "请为 $theme_name 主题选择 颜色搭配方案(默认zioer)"
+    menu_iteml "zioer" "zioer颜色方案默认使用 ~/.Xresources 颜色方案"
+    menu_tail
+    selected_theme=""
+    common_select "$tmp_path/colors"
+    color_name="`echo ${selected_theme} | sed 's/.ini$//g'`"
+    [[ "$color_name" == "" ]] && color_name="zioer"
+    
+    sed -i "s|^exec.*config/polybar_themes.*|exec_always --no-startup-id  ~/.config/polybar_themes/launch.sh ${theme_name} ${prompt_style} ${color_name} > /dev/null 2>\&1|g" ~/.config/i3/config ~/.config/i3/config.d/*
+    menu_iteml "已切换polybar_themes 为 ${theme_name} 主题, ${prompt_style} 样式, ${color_name} 颜色搭配"
+    i3-msg restart
+}
+function install_clipmenu_deps() {
+    command -v apt-get && sudo apt-get install   -y xsel libxfixes-dev
+    command -v dnf     && sudo dnf install       -y xsel libXfixes-devel
+    command -v zypper  && sudo zypper install    -y xsel libXfixes-devel
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed xsel libxfixes
+}
+function install_clipmenu() {
+    prompt "安装 clipmenu 剪切板菜单"
+    # 依赖安装
+    install_clipmenu_deps
+    tmp_path="$tmp_dir/clipnotify"
+    [[ -d $tmp_path ]] || git clone https://github.com/cdown/clipnotify.git $tmp_path
+    cd $tmp_path && make && sudo PREFIX=/usr make install
+    tmp_path="$tmp_dir/clipmenu"
+    [[ -r "$tmp_path" ]] || git clone https://github.com/cdown/clipmenu $tmp_path
+    cd $tmp_path && sudo make install
+}
+function install_xscreensaver_deps() {
+    command -v apt-get && sudo apt-get install   -y perl intltool libxext-dev libxi-dev libxt-dev libxft-dev libxinerama-dev \
+                        libxrandr-dev libxxf86vm-dev libgl-dev libgl1-mesa-dev libglu1-mesa-dev libgle3-dev libgtk2.0-dev  libgtk-3-dev libgdk-pixbuf-xlib-2.0-dev \
+                        libxml2 libxml2-dev libpam0g libpam0g-dev dbus libsystemd-dev 
+    command -v dnf     && sudo dnf install       -y perl intltool libXext-devel libXi-devel libXft-devel libXinerama-devel \
+                        libXrandr-devel libXxf86vm-devel mesa-libGL-devel gtk2-devel gdk-pixbuf2-devel gdk-pixbuf2-xlib-devel \
+                        libxml2-devel pam pam-devel dbus systemd-devel
+    command -v zypper  && sudo zypper install    -y perl intltool libXext-devel libXi-devel libXft-devel libXinerama-devel \
+                        libXrandr-devel libXxf86vm-devel Mesa-libGL-devel libgtk-2_0-0 gtk2-devel gdk-pixbuf-devel gdk-pixbuf-xlib-devel \
+                        libxml2-devel pam pam-devel dbus-1 systemd-devel
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed perl intltool libxext libxi libxft libxinerama \
+                        libxrandr libxxf86vm mesa glu gtk2 gdk-pixbuf2 gdk-pixbuf-xlib libxml2 pam dbus systemd intltool
+    install_urxvt_ext
+}
+function compile_xscreensaver() {
+    str_version="6.06"
+    url="https://www.jwz.org/xscreensaver/xscreensaver-${str_version}.tar.gz"
+    filename="${tmp_dir}/xscreensaver-${str_version}.tar.gz"
+    [[ ! -f ${filename} ]] && curl -L -o ${filename} ${url}
+    tmp_path="${tmp_dir}/xscreensaver-${str_version}"
+    [[ ! -r ${tmp_path} ]] && tar axvf ${filename} -C ${tmp_dir}
+    install_xscreensaver_deps
+    cd $tmp_path && ./configure --prefix=/usr && make -j$(nproc) && sudo make install
+    [[ "$?" != "0" ]] && echo "安装失败!找到错误原因后重新尝试!" && return 2
+    [[ ! -x /usr/bin/xscreensaver ]] && echo "安装失败!没找到 xscreensaver 命令" && return 3
+    echo "恭喜您! xscreensaver 安装成功!"
+}
+function config_resolution() {
+    # 自适应分辨率 1080p/2k/4k
+    # 获取屏幕分辨率
+    resolution=$(xrandr | grep ' connected primary' | awk '{print $4}' | awk -F'[x+]' '{ print $2 }')
+    # 分辨率检测并设置polybar高度
+    if [[ $resolution -le 1080 ]] ; then # 老旧非高分屏幕 11英寸-13英寸
+        dpi=96
+        font_size=10
+    elif [[ $resolution -le 1440 ]]; then
+        dpi=140
+        font_size=12
+    else # elif [[ $resolution -gt 1440 ]]; then
+        dpi=196
+        font_size=12
+    fi
+    echo "resolution: $resolution , dpi: $dpi , font_size: $font_size"
+    # 修改跟分辨率相关配置
+    sed -i "s/Xft.dpi:.*/Xft.dpi: $dpi/g" ~/.Xresources
+    sed -E -i "s/dpi:.*;/dpi: $dpi;/g;s/font: \"([^\"]+)( [0-9]+ *)\";/font: \"\1 $font_size\";/g" ~/.config/rofi/config.rasi
+}
+function check_terminal_list() {
+    for tname in x-terminal-emulator mate-terminal gnome-terminal terminator xfce4-terminal urxvt rxvt termit Eterm aterm uxterm xterm roxterm termite lxterminal terminology st qterminal lilyterm tilix terminix konsole kitty guake tilda alacritty hyper wezterm
+    do
+        command -v $tname > /dev/null 2>&1  && echo $tname
+    done
+}
+function select_terminal() {
+    selected_theme=""
+    prompt "选择Terminal终端(默认`echo_greenr i3-sensible-terminal`)" || return 1
+    terminal_list=`check_terminal_list`
+    echo "当前可用终端: $terminal_list"
+    common_list_select "$terminal_list" "terminal"
+    if [[ "$selected_theme" != "" ]] ; then
+        sed -i "s#^set \$TERMINAL .*#set \$TERMINAL $selected_theme#g" ~/.config/i3/config ~/.config/i3/config.d/*
+        echo "已经设置新的 TERMINAL 终端工具，重新加载i3wm后生效"
+        i3-msg restart
+    fi
+}
+function update_i3config() {
+    # 更新 i3config 到最新版本
+    tmp_path="$tmp_dir/i3config"
+    install_path="$0"
+    curl -L -o $tmp_path https://raw.githubusercontent.com/switchToLinux/dotfiles/main/i3config
+    [[ "$?" == "0" ]] && mv ${install_path} ${install_path}.old && mv $tmp_path ${install_path}
+    chmod +x ${install_path}
+    echo "已更新 i3config 到最新版本 ${I3CONFIG_VERSION}"
+}
+
+function get_dm_list() {
+    for dm in lightdm sddm gdm
+    do
+        echo $dm
+    done
+}
+function install_xinit() {
+    # 选择DM
+    selected_theme=""
+    prompt "选择DM显示管理器(默认`echo_greenr lightdm`)" || return 1
+    dm_list="`get_dm_list`"
+    echo "当前可用终端: $dm_list"
+    common_list_select "$dm_list" "显示管理器"
+    [[ "$selected_theme" == "" ]] && selected_theme="lightdm"
+
+    # 安装X窗口系统和DM
+    if [[ "$selected_theme" == "lightdm" ]] ; then
+        command -v apt-get && sudo apt-get install   -y xinit lightdm lightdm-gtk-greeter
+        command -v dnf     && sudo dnf install       -y xinit lightdm lightdm-gtk
+        command -v zypper  && sudo zypper install    -y xinit lightdm lightdm-gtk-greeter
+        command -v pacman  && sudo pacman -S --needed --noconfirm --needed xorg-xinit lightdm lightdm-gtk-greeter
+    elif [[ "$selected_theme" == "sddm" ]] ; then
+        command -v apt-get && sudo apt-get install   -y xinit sddm
+        command -v dnf     && sudo dnf install       -y xinit sddm
+        command -v zypper  && sudo zypper install    -y xinit sddm
+        command -v pacman  && sudo pacman -S --needed --noconfirm --needed xorg-xinit sddm
+    elif [[ "$selected_theme" == "gdm" ]] ; then
+        command -v apt-get && sudo apt-get install   -y xinit gdm3
+        command -v dnf     && sudo dnf install       -y xinit gdm
+        command -v zypper  && sudo zypper install    -y xinit gdm
+        command -v pacman  && sudo pacman -S --needed --noconfirm --needed xorg-xinit gdm
+    fi
+    # 自启动lightdm
+    sudo systemctl enable --now $selected_theme.service
+    # 禁止gettty服务
+    sudo systemctl disable getty@.service
+}
+function install_tmux() {  # Terminal终端会话管理工具,类似Screen
+    echo "正在执行 install_tmux"
+    prompt "开始安装 tmux" || return 1
+    command -v tmux >/dev/null && ! prompt "已经安装过 tmux ，继续安装?" && return 0
+    # basic config with plugin
+    echo "配置tmux"
+    create_symlink $dotfiles_path/tmux/tmux.conf ~/.tmux.conf
+
+    echo "开始安装tmux插件"
+    # 配置 tmux
+    command -v apt-get && sudo apt-get install   -y tmux
+    command -v dnf     && sudo dnf install       -y tmux
+    command -v zypper  && sudo zypper install    -y tmux
+    command -v pacman  && sudo pacman -S --needed --noconfirm --needed tmux
+    mkdir -p $HOME/.tmux/plugins/
+    cd $HOME/.tmux/plugins/
+    git clone https://github.com/tmux-plugins/tpm.git
+    git clone https://github.com/tmux-plugins/tmux-resurrect.git
+    git clone https://github.com/tmux-plugins/tmux-continuum.git
+    echo "成功执行 install_tmux"
+}
+
+function usage_shortcuts() {
+    echo $line_feed
+    echo "i3wm常用快捷键列表:"
+    echo "  打开 vscode : \$mod+c"
+    echo "  打开 terminal : \$mod+Enter"
+    echo "  打开 google-chrome :  \$mod+g"
+    echo "  打开 firefox :  \$mod+b"
+    echo "  隐藏/显示 顶部bar ： \$mod+ + n"
+    echo "  隐藏/显示 底部bar ： \$mod+ + m"
+    echo "  工作区双屏切换: \$mod+x"
+    echo "  系统退出: \$mod+l"
+    echo "  显示菜单: \$mod+d"
+    echo "  显示窗口列表菜单: \$mod+Tab"
+    echo "  切换窗口布局类型(split/stacking/tabbed): \$mod+e"
+    echo "  切换垂直/水平方向布局窗口: \$mod+v"
+    echo "  焦点窗口的焦点切换到父节点: \$mod+a"
+    echo "  焦点窗口的焦点切换到子节点: \$mod+shift+a"
+    echo "  全屏显示当前焦点窗口: \$mod+f"
+    echo "  关闭焦点窗口: \$mod+q"
+    echo "  移动焦点窗口: \$mod+Shift+方向键"
+    echo "  暂存工作区-暂存当前窗口: \$mod+shift+minus(减号)"
+    echo "  暂存工作区-显示暂存窗口: \$mod+minus (多个暂存窗口会逐个切换)"
+    echo "  浮动窗口-切换焦点窗口悬浮/普通 : \$mod+shift+space"
+    echo "  浮动窗口-移动浮动窗口上下左右: \$mod+Shift+方向键"
+    echo "  浮动窗口Sticky-焦点窗口切换: \$mod+Shift+s"
+    echo "  浮动窗口Sticky-切换为置顶悬浮小窗口: \$mod+shift+i (45 ppt 45 ppt => position 30,30 px )"
+    echo "  配置变更-重新加载: \$mod+Shift+c"
+    echo "  配置变更-i3wm重启: \$mod+Shift+r"
+    echo "  锁屏操作-i3lock: \$mod+l"
+    echo "  重启关机等电源管理操作: \$mod+Shift+l"
+    echo "  开启resize模式： \$mod+r， 方向键调整，确认按Enter,取消按Esc"
+    echo "  窗口间边距: 增加\$mod+Backspace ， 减小\$mod+Shift+Backspace"
+    echo "  窗口外边距: 增加\$mod+= ， 减小\$mod+Shift+="
+    echo "  焦点窗口透明度修改: 增加5%\$mod+[ ，减小5%\$mod+]"
+}
+
+function auto_install_all() {
+    # 自动安装
+    default_confirm="yes"
+    READ_TIMEOUT=5
+    install_xinit
+    compile_i3wm             
+    compile_polybar          
+    compile_picom            
+    compile_i3lock_color     
+    install_clipmenu         
+    compile_rofi             
+    compile_xscreensaver      
+    install_urxvt_ext        
+    install_others           
+    install_dotfiles         
+    select_polybar_themes    
+    select_rofi_themes       
+    select_xresources_themes 
+    config_resolution        
+    install_tmux
+}
+function show_menu_install() {
+    menu_head "i3config ${I3CONFIG_VERSION} 安装选项菜单"
+    menu_item 1 i3wm
+    menu_item 2 polybar
+    menu_item 3 picom
+    menu_item 4 i3lock_color
+    menu_item 5 tmux
+    menu_item 6 rofi
+    menu_item 7 xscreensaver
+    menu_item 8 compile_mpd
+    menu_item 9 other[feh/mpd/dunst.]
+    menu_item 0 dotfiles
+    menu_tail
+    menu_item h 查看常用快捷键列表
+    menu_item p select_polybar_themes
+    menu_item r select_rofi_themes
+    menu_item s select_xresources_themes
+    menu_item t select_terminal
+    menu_item x match_resolution
+    menu_item y install_xinit
+    menu_item z 自动安装
+    menu_tail
+    menu_item u update_i3config
+    menu_item q 返回上级菜单
+    menu_tail
+}
+function start_main() { # 安装菜单选择
+    while true
+    do
+        show_menu_install
+        read -t $READ_TIMEOUT -r -n 1 -e  -p "`echo_greenr 请选择:` ${PMT} " str_answer
+        case "$str_answer" in
+            1) compile_i3wm             ;;
+            2) compile_polybar          ;;
+            3) compile_picom            ;;
+            4) compile_i3lock_color     ;;
+            5) install_tmux             ;;
+            6) compile_rofi             ;;
+            7) compile_xscreensaver     ;;
+            8) compile_mpd              ;;
+            9) install_others           ;;
+            0) install_dotfiles         ;;
+            p) select_polybar_themes    ;;
+            r) select_rofi_themes       ;;
+            s) select_xresources_themes ;;
+            t) select_terminal          ;;
+            x) config_resolution        ;;
+            y) install_xinit            ;;
+            z) auto_install_all         ;;
+            u) update_i3config          ;;
+            h) usage_shortcuts          ;;
+            q|"") return 0              ;;  # 返回上级菜单
+            *) redr_line "没这个选择[$str_answer],搞错了再来." ;;
+        esac
+    done
+}
+
+
+####### Main process #################################
+menu_head "$WELCOME"
+check_term      # 检测TERM终端信息
+check_basic     # 基础依赖命令检测与安装
+
+if [ "$#" -eq 0 ]; then  # 无参数情况:进入菜单选择
+    start_main
+else  # 命令执行模式(执行后退出)
+    command="$1"
+    case "$command" in
+        h|help|-h)
+            usage_shortcuts ;;
+        i3)
+            install_i3wm ;;
+        polybar)
+            compile_polybar ;;
+        polybar_themes)
+            install_polybar_themes ;;
+    esac
+fi
+
+menu_head "${SEE_YOU}"
